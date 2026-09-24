@@ -1,0 +1,7 @@
+classlens_env/
+__pycache__/
+*.pyc
+students.pkl
+shaik_embeddings.pkl
+attendance.csv
+.env
