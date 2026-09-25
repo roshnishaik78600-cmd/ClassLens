@@ -1,372 +1,199 @@
-# 🎓 ClassLens
+# ClassLens
 
 ### AI-Powered Face Recognition Attendance System
 
-ClassLens is an AI-powered attendance management system that uses **computer vision and deep learning** to detect and recognize students from camera input and automatically record attendance.
+ClassLens is a real-time **AI attendance system** that uses computer vision and deep facial embeddings to automatically recognize students and record attendance through a webcam.
 
-The application combines **OpenCV, DeepFace, FaceNet, NumPy, Pandas and Streamlit** to provide an interactive local dashboard for student enrollment, face recognition and attendance management.
-
----
-
-## 🚀 Overview
-
-Traditional attendance systems can be time-consuming and require manual record keeping.
-
-ClassLens automates this process through a computer-vision pipeline:
-
-```text
-Webcam
-   ↓
-Face Detection
-   ↓
-Face Extraction
-   ↓
-FaceNet Embedding
-   ↓
-Embedding Comparison
-   ↓
-Student Recognition
-   ↓
-Attendance Recording
-   ↓
-Streamlit Dashboard
-```
-
-The system is designed to demonstrate how **AI + Computer Vision + Web Applications** can be combined into a practical real-world application.
+It combines **MediaPipe** for fast face detection with **DeepFace/FaceNet** for facial embedding generation and **Euclidean-distance matching** for identity recognition.
 
 ---
 
 ## ✨ Features
 
-* 🎥 Real-time webcam-based face detection
-* 🧠 Deep learning-based face recognition
-* 🔬 Face embeddings using FaceNet
-* 👤 Student enrollment
-* 📸 Face image capture
-* 🔍 Face detection using OpenCV
-* ✅ Automatic attendance marking
-* 📊 Attendance record management
-* 🌐 Interactive Streamlit dashboard
-* 💾 Local attendance storage
-* 🔐 Local processing of biometric information
-* 🧩 Modular Python project structure
+* 🎥 Live webcam enrollment
+* 👤 Multi-angle face sample collection
+* 🧠 FaceNet facial embeddings
+* ⚡ MediaPipe face detection
+* 🔍 Unknown-person detection
+* ✅ Automated attendance
+* 🛡️ Duplicate attendance prevention
+* 📊 Streamlit dashboard
+* 💾 CSV attendance records
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ Architecture
 
 ```text
-                 ┌───────────────┐
-                 │    Webcam     │
-                 └───────┬───────┘
-                         │
-                         ▼
-              ┌────────────────────┐
-              │ OpenCV Face         │
-              │ Detection           │
-              └─────────┬──────────┘
-                        │
-                        ▼
-              ┌────────────────────┐
-              │ Face Extraction    │
-              └─────────┬──────────┘
-                        │
-                        ▼
-              ┌────────────────────┐
-              │ FaceNet Embedding  │
-              └─────────┬──────────┘
-                        │
-                        ▼
-              ┌────────────────────┐
-              │ Embedding          │
-              │ Comparison         │
-              └─────────┬──────────┘
-                        │
-                 ┌──────┴──────┐
-                 │             │
-              Match          No Match
-                 │             │
-                 ▼             ▼
-          ┌────────────┐   ┌─────────┐
-          │ Recognized │   │ Unknown │
-          │  Student   │   │  Face   │
-          └─────┬──────┘   └─────────┘
-                │
-                ▼
-        ┌─────────────────┐
-        │ Attendance      │
-        │ Recording       │
-        └─────────────────┘
+Webcam
+   ↓
+OpenCV
+   ↓
+MediaPipe Face Detection
+   ↓
+Face Crop
+   ↓
+FaceNet Embedding
+   ↓
+Euclidean Distance
+   ↓
+Student / Unknown
+   ↓
+Attendance
+   ↓
+CSV
 ```
 
 ---
 
 ## 🧠 How It Works
 
-### 1. Student Enrollment
+### Enrollment
 
-A student's face is captured through the camera.
+Students enroll using the live webcam while changing their face position and angle.
 
 ```text
-Student
-   ↓
-Camera
-   ↓
+Webcam
+  ↓
 Face Detection
-   ↓
-Face Image
-   ↓
-Face Embedding
-   ↓
-Stored Representation
+  ↓
+Multiple Face Samples
+  ↓
+FaceNet Embeddings
+  ↓
+Student Profile
 ```
 
-The resulting facial representation can later be used for recognition.
+Multiple embeddings help represent the student's face under different poses and conditions.
 
-### 2. Face Detection
+### Recognition
 
-ClassLens uses **OpenCV** for detecting faces in camera frames.
-
-The Haar Cascade classifier identifies regions of an image that contain faces.
-
-### 3. Face Recognition
-
-Detected faces are processed through **DeepFace / FaceNet** to generate numerical face embeddings.
-
-Conceptually:
+A live face is converted into an embedding and compared with enrolled embeddings using Euclidean distance.
 
 ```text
-Face Image
+Live Face
+   ↓
+FaceNet
+   ↓
+Embedding
+   ↓
+Distance Matching
+   ↓
+Student / Unknown
+```
+
+If the distance satisfies the configured threshold, the student is recognized.
+
+### Attendance
+
+After recognition, ClassLens checks whether attendance has already been recorded for that student on the current date.
+
+```text
+Recognized
     ↓
-Deep Learning Model
-    ↓
-Embedding Vector
+Already Marked?
+   ↙       ↘
+ Yes        No
+ ↓          ↓
+Ignore    Mark Present
+             ↓
+            CSV
 ```
-
-The generated embedding is compared with previously enrolled student embeddings.
-
-### 4. Recognition
-
-If the embedding is sufficiently similar to an enrolled representation:
-
-```text
-Face → Student Identified
-```
-
-Otherwise:
-
-```text
-Face → Unknown
-```
-
-### 5. Attendance
-
-When a student is recognized, ClassLens records the attendance information.
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Technology   | Purpose                            |
-| ------------ | ---------------------------------- |
-| Python       | Core programming language          |
-| OpenCV       | Computer vision and face detection |
-| DeepFace     | Face recognition framework         |
-| FaceNet      | Facial embedding generation        |
-| TensorFlow   | Deep learning backend              |
-| NumPy        | Numerical operations               |
-| Pandas       | Attendance data handling           |
-| Streamlit    | Interactive web dashboard          |
-| CSV / Pickle | Local data storage                 |
+| Technology       | Purpose                   |
+| ---------------- | ------------------------- |
+| Python 3.12      | Application               |
+| OpenCV           | Webcam & image processing |
+| MediaPipe        | Face detection            |
+| DeepFace         | Face recognition          |
+| FaceNet          | Facial embeddings         |
+| NumPy            | Numerical computation     |
+| Streamlit        | Dashboard                 |
+| Streamlit-WebRTC | Live webcam               |
+| PyAV             | Video frames              |
+| CSV              | Attendance storage        |
 
 ---
 
-## 📂 Project Structure
+## 📁 Project Structure
 
 ```text
 ClassLens/
 │
-├── dataset/
-│
-├── screenshots/
-│
-├── .gitignore
-├── README.md
-├── requirements.txt
-│
 ├── streamlit_app.py
 ├── app_core.py
-├── capture_faces.py
-├── detect.py
-├── encode_faces.py
-├── generate_embedding.py
 ├── generate_embeddings.py
-├── webcam.py
+├── requirements.txt
+├── README.md
+├── .gitignore
 │
-└── haarcascade_frontalface_default.xml
+├── models/
+│   └── face_landmarker.task
+│
+└── screenshots/
 ```
 
-### Core Files
-
-| File                                  | Description                    |
-| ------------------------------------- | ------------------------------ |
-| `streamlit_app.py`                    | Main Streamlit dashboard       |
-| `app_core.py`                         | Core application functionality |
-| `capture_faces.py`                    | Captures student face images   |
-| `detect.py`                           | Face detection functionality   |
-| `encode_faces.py`                     | Face encoding functionality    |
-| `generate_embedding.py`               | Generates face embeddings      |
-| `generate_embeddings.py`              | Processes multiple embeddings  |
-| `webcam.py`                           | Webcam-related functionality   |
-| `haarcascade_frontalface_default.xml` | Haar Cascade face detector     |
+Personal datasets, embeddings, and attendance records are excluded from GitHub.
 
 ---
 
-## ⚙️ Installation
+## ⚙️ Setup
 
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/roshnishaik78600-cmd/ClassLens.git
-```
-
-### 2. Enter the project directory
-
-```bash
-cd ClassLens
-```
-
-### 3. Create a virtual environment
-
-Windows:
-
-```bash
-python -m venv classlens_env
-```
-
-### 4. Activate the environment
-
-```bash
-classlens_env\Scripts\activate
-```
-
-### 5. Install dependencies
+**Python:** 3.12
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 6. Start ClassLens
+Make sure the MediaPipe model exists:
+
+```text
+models/face_landmarker.task
+```
+
+Run:
 
 ```bash
 python -m streamlit run streamlit_app.py
 ```
 
-### 7. Open the application
+---
 
-Streamlit will provide a local address, typically:
+## 🔑 Key Design Decisions
 
-```text
-http://localhost:8501
-```
+**MediaPipe instead of Haar Cascade**
+Modern, efficient face detection suitable for real-time processing.
+
+**FaceNet instead of raw image comparison**
+Converts faces into numerical embeddings, making similarity comparison more robust to changes in pose, lighting, and expression.
+
+**Multiple enrollment samples**
+Provides the recognition system with more facial variation than a single image.
+
+**Detection separated from recognition**
+MediaPipe handles lightweight detection while FaceNet is used for the more expensive embedding step.
 
 ---
 
-## 📸 Screenshots
+## 🚀 Future Improvements
 
-Add screenshots of the working application here.
-
-### Dashboard
-
-![ClassLens Dashboard](screenshots/dashboard.png)
-
-### Student Enrollment
-
-![Student Enrollment](screenshots/enrollment.png)
-
-### Attendance
-
-![Attendance Dashboard](screenshots/attendance.png)
-
-> Replace the screenshot filenames above with the actual images you add to the repository.
-
----
-
-## 🔐 Privacy & Security
-
-ClassLens is intended as a local demonstration project.
-
-Face images, generated embeddings and attendance records may contain sensitive information and **should not be committed to a public GitHub repository**.
-
-The repository therefore uses `.gitignore` rules to prevent sensitive or generated files from being uploaded.
-
-For a production deployment, additional safeguards would be required, including:
-
-* Secure authentication
-* Encrypted biometric storage
-* Database access controls
-* Role-based authorization
-* Data retention policies
-* Consent management
+* Database-backed student management
+* Recognition threshold calibration
 * Liveness / anti-spoofing
-* Secure API communication
-* Audit logging
+* Attendance analytics
+* Authentication and role management
+* Cloud deployment
 
 ---
 
-## 🔮 Future Scope
+## 💼 Resume Highlight
 
-Potential improvements include:
+**ClassLens — AI Face Recognition Attendance System**
+`Python | OpenCV | MediaPipe | DeepFace | FaceNet | Streamlit`
 
-* 👥 Multi-face recognition
-* 🛡️ Liveness detection / anti-spoofing
-* 🗄️ Database integration
-* 📊 Advanced attendance analytics
-* 🔐 Authentication and role-based access control
-* ☁️ Cloud deployment
-* 📱 Mobile-friendly interface
-* 📈 Attendance reports and visualizations
-* 🔔 Automated attendance notifications
-* 🧠 Improved recognition accuracy
-* ⚡ Real-time multi-student processing
-
----
-
-## 🎯 Learning Outcomes
-
-This project demonstrates practical experience with:
-
-* Computer Vision
-* Face Detection
-* Face Recognition
-* Deep Learning
-* Face Embeddings
-* Python Application Development
-* Streamlit
-* Data Processing
-* Real-time Webcam Processing
-* Local AI/ML deployment
-
----
-
-## ⚠️ Disclaimer
-
-ClassLens is an educational and portfolio project demonstrating face recognition and automated attendance concepts.
-
-It should not be deployed in real-world educational environments without appropriate testing, security controls, privacy protections, consent mechanisms and compliance with applicable laws and institutional policies.
-
----
-
-## 👨‍💻 Author
-
-### Roshni Shaik
-
-GitHub:
-https://github.com/roshnishaik78600-cmd
-
----
-
-## ⭐ Project
-
-If you find this project useful or interesting, consider giving the repository a ⭐ on GitHub.
+> Built a real-time AI attendance system using MediaPipe face detection and FaceNet facial embeddings, implementing multi-angle enrollment, Euclidean-distance recognition, unknown-person detection, and automated duplicate-safe attendance tracking.
 
