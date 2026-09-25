@@ -1,7 +1,14 @@
+
+venv/
 classlens_env/
 __pycache__/
 *.pyc
+
+dataset/
 students.pkl
 shaik_embeddings.pkl
 attendance.csv
+
 .env
+.vscode/
+

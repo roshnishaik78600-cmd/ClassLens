@@ -1,35 +1,62 @@
-from deepface import DeepFace
 import os
 import pickle
 
-# Folder containing Shaik's face images
-dataset_path = "dataset/Shaik"
+import numpy as np
+from deepface import DeepFace
 
-# Store all embeddings here
-embeddings = []
 
-# Go through every image in the folder
-for filename in os.listdir(dataset_path):
+DATASET_FOLDER = "dataset/Shaik"
+OUTPUT_FILE = "shaik_embeddings.pkl"
 
-    if filename.endswith(".jpg"):
 
-        image_path = os.path.join(dataset_path, filename)
+def generate_embeddings():
+    """Generate FaceNet embeddings from the Shaik dataset."""
 
-        print("Processing:", filename)
+    embeddings = []
 
-        result = DeepFace.represent(
-            img_path=image_path,
-            model_name="Facenet",
-            detector_backend="opencv"
+    print("Generating Shaik embeddings...\n")
+
+    for filename in sorted(os.listdir(DATASET_FOLDER)):
+        if not filename.lower().endswith((".jpg", ".jpeg", ".png")):
+            continue
+
+        image_path = os.path.join(
+            DATASET_FOLDER,
+            filename
         )
 
-        embedding = result[0]["embedding"]
+        try:
+            result = DeepFace.represent(
+                img_path=image_path,
+                model_name="Facenet",
+                detector_backend="opencv",
+                enforce_detection=True
+            )
 
-        embeddings.append(embedding)
+            embedding = np.array(
+                result[0]["embedding"],
+                dtype=np.float32
+            )
 
-# Save embeddings
-with open("shaik_embeddings.pkl", "wb") as file:
-    pickle.dump(embeddings, file)
+            embeddings.append(embedding)
 
-print("Done!")
-print("Total embeddings:", len(embeddings))
+            print(f"OK: {filename}")
+
+        except Exception as error:
+            print(f"FAILED: {filename} -> {error}")
+
+    if not embeddings:
+        print("\nNo embeddings generated.")
+        return
+
+    with open(OUTPUT_FILE, "wb") as file:
+        pickle.dump(embeddings, file)
+
+    print(
+        f"\nSuccessfully saved {len(embeddings)} embeddings."
+    )
+    print(f"File: {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    generate_embeddings()

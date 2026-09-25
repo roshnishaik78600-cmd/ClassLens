@@ -1,266 +1,147 @@
-import streamlit as st
-import cv2
-import numpy as np
-import pickle
+
 import os
 import csv
+import pickle
 from datetime import datetime
 
+import av
+import cv2
+import numpy as np
+import streamlit as st
+import mediapipe as mp
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
-
-st.set_page_config(
-    page_title="ClassLens",
-    page_icon="🎓",
-    layout="wide"
-)
+from deepface import DeepFace
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
 
 # =========================================================
-# PROJECT PATHS
+# CONFIG
 # =========================================================
 
-BASE_DIR = os.path.dirname(
-    os.path.abspath(__file__)
-)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-STUDENT_FILE = os.path.join(
-    BASE_DIR,
-    "students.pkl"
-)
+STUDENTS_FILE = os.path.join(BASE_DIR, "students.pkl")
+ATTENDANCE_FILE = os.path.join(BASE_DIR, "attendance.csv")
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+MODEL_PATH = os.path.join(BASE_DIR, "models", "face_landmarker.task")
 
-OLD_EMBEDDING_FILE = os.path.join(
-    BASE_DIR,
-    "shaik_embeddings.pkl"
-)
-
-ATTENDANCE_FILE = os.path.join(
-    BASE_DIR,
-    "attendance.csv"
-)
-
-CASCADE_FILE = os.path.join(
-    BASE_DIR,
-    "haarcascade_frontalface_default.xml"
-)
-
-THRESHOLD = 5.0
+SAMPLES_NEEDED = 20
+RECOGNITION_THRESHOLD = 5.0
 
 
 # =========================================================
-# LOAD OPENCV CASCADE
+# MEDIAPIPE
 # =========================================================
 
-face_cascade = None
-CASCADE_OK = False
+BaseOptions = mp.tasks.BaseOptions
+FaceLandmarker = mp.tasks.vision.FaceLandmarker
+FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+RunningMode = mp.tasks.vision.RunningMode
 
-try:
 
-    if os.path.exists(CASCADE_FILE):
+def make_landmarker():
 
-        face_cascade = cv2.CascadeClassifier(
-            CASCADE_FILE
-        )
+    options = FaceLandmarkerOptions(
+        base_options=BaseOptions(
+            model_asset_path=MODEL_PATH
+        ),
+        running_mode=RunningMode.IMAGE,
+        num_faces=1,
+        min_face_detection_confidence=0.5,
+        min_face_presence_confidence=0.5
+    )
 
-        if not face_cascade.empty():
-            CASCADE_OK = True
+    return FaceLandmarker.create_from_options(options)
 
-except Exception:
-    CASCADE_OK = False
+
+def get_face(image, landmarker):
+
+    rgb = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2RGB
+    )
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=rgb
+    )
+
+    result = landmarker.detect(mp_image)
+
+    if not result.face_landmarks:
+        return None
+
+    landmarks = result.face_landmarks[0]
+
+    h, w = image.shape[:2]
+
+    xs = [int(p.x * w) for p in landmarks]
+    ys = [int(p.y * h) for p in landmarks]
+
+    x1 = max(0, min(xs))
+    y1 = max(0, min(ys))
+    x2 = min(w, max(xs))
+    y2 = min(h, max(ys))
+
+    width = x2 - x1
+    height = y2 - y1
+
+    if width < 100 or height < 100:
+        return None
+
+    # Add a little padding
+    px = int(width * 0.12)
+    py = int(height * 0.12)
+
+    x1 = max(0, x1 - px)
+    y1 = max(0, y1 - py)
+    x2 = min(w, x2 + px)
+    y2 = min(h, y2 + py)
+
+    return image[y1:y2, x1:x2].copy()
 
 
 # =========================================================
-# DEEPFACE
-# =========================================================
-
-DeepFace = None
-DEEPFACE_OK = False
-DEEPFACE_ERROR = ""
-
-try:
-
-    from deepface import DeepFace
-
-    DEEPFACE_OK = True
-
-except Exception as e:
-
-    DEEPFACE_ERROR = str(e)
-
-
-# =========================================================
-# LOAD STUDENTS
+# STUDENT STORAGE
 # =========================================================
 
 def load_students():
 
-    if os.path.exists(STUDENT_FILE):
-
-        try:
-
-            with open(
-                STUDENT_FILE,
-                "rb"
-            ) as file:
-
-                data = pickle.load(file)
-
-            if isinstance(data, dict):
-                return data
-
-        except Exception:
-            pass
-
-    # Load old Shaik embeddings
-    if os.path.exists(OLD_EMBEDDING_FILE):
-
-        try:
-
-            with open(
-                OLD_EMBEDDING_FILE,
-                "rb"
-            ) as file:
-
-                old_data = pickle.load(file)
-
-            if isinstance(old_data, list):
-
-                return {
-                    "Shaik": old_data
-                }
-
-            if isinstance(old_data, np.ndarray):
-
-                return {
-                    "Shaik": [
-                        old_data.tolist()
-                    ]
-                }
-
-            return {
-                "Shaik": [
-                    old_data
-                ]
-            }
-
-        except Exception:
-            pass
-
-    return {}
-
-
-# =========================================================
-# SAVE STUDENTS
-# =========================================================
-
-def save_students(students):
+    if not os.path.exists(STUDENTS_FILE):
+        return {}
 
     try:
 
         with open(
-            STUDENT_FILE,
-            "wb"
+            STUDENTS_FILE,
+            "rb"
         ) as file:
 
-            pickle.dump(
-                students,
-                file
-            )
-
-        return True
+            return pickle.load(file)
 
     except Exception:
-        return False
+
+        return {}
+
+
+def save_students(students):
+
+    with open(
+        STUDENTS_FILE,
+        "wb"
+    ) as file:
+
+        pickle.dump(
+            students,
+            file
+        )
 
 
 # =========================================================
-# FACE DETECTION
-# =========================================================
-
-def detect_face(image):
-
-    if image is None:
-        return None
-
-    if not CASCADE_OK:
-        return None
-
-    try:
-
-        gray = cv2.cvtColor(
-            image,
-            cv2.COLOR_BGR2GRAY
-        )
-
-        faces = face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(80, 80)
-        )
-
-        if faces is None:
-            return None
-
-        if len(faces) == 0:
-            return None
-
-        largest = max(
-            faces,
-            key=lambda box: box[2] * box[3]
-        )
-
-        x, y, w, h = largest
-
-        padding = 30
-
-        x1 = max(
-            0,
-            x - padding
-        )
-
-        y1 = max(
-            0,
-            y - padding
-        )
-
-        x2 = min(
-            image.shape[1],
-            x + w + padding
-        )
-
-        y2 = min(
-            image.shape[0],
-            y + h + padding
-        )
-
-        face = image[
-            y1:y2,
-            x1:x2
-        ]
-
-        if face.size == 0:
-            return None
-
-        return face
-
-    except Exception:
-        return None
-
-
-# =========================================================
-# CREATE EMBEDDING
+# FACENET
 # =========================================================
 
 def create_embedding(face):
-
-    if face is None:
-        return None
-
-    if not DEEPFACE_OK:
-        return None
 
     try:
 
@@ -271,9 +152,6 @@ def create_embedding(face):
             enforce_detection=False
         )
 
-        if not result:
-            return None
-
         embedding = np.array(
             result[0]["embedding"],
             dtype=np.float32
@@ -282,212 +160,208 @@ def create_embedding(face):
         return embedding
 
     except Exception:
+
         return None
 
 
 # =========================================================
-# RECOGNITION
+# WEBCAM ENROLLMENT
 # =========================================================
 
-def recognize_face(
-    image,
-    students
-):
+class EnrollmentProcessor(VideoProcessorBase):
 
-    face = detect_face(image)
+    def __init__(self):
 
-    if face is None:
-        return None, None
+        self.samples = []
+        self.frame_count = 0
+        self.landmarker = make_landmarker()
 
-    embedding = create_embedding(face)
+    def recv(self, frame):
 
-    if embedding is None:
-        return None, None
-
-    best_name = "Unknown"
-
-    best_distance = float("inf")
-
-    for name, saved_embeddings in students.items():
-
-        if not isinstance(
-            saved_embeddings,
-            list
-        ):
-
-            saved_embeddings = [
-                saved_embeddings
-            ]
-
-        for saved in saved_embeddings:
-
-            try:
-
-                saved = np.array(
-                    saved,
-                    dtype=np.float32
-                )
-
-                if saved.shape != embedding.shape:
-                    continue
-
-                distance = np.linalg.norm(
-                    embedding - saved
-                )
-
-                if distance < best_distance:
-
-                    best_distance = distance
-                    best_name = name
-
-            except Exception:
-                continue
-
-    if (
-        best_name != "Unknown"
-        and best_distance < THRESHOLD
-    ):
-
-        return (
-            best_name,
-            best_distance
+        image = frame.to_ndarray(
+            format="bgr24"
         )
 
-    return (
-        "Unknown",
-        best_distance
-    )
+        display = image.copy()
+
+        self.frame_count += 1
+
+        # Capture every 5th frame
+        if (
+            self.frame_count % 5 == 0
+            and len(self.samples) < SAMPLES_NEEDED
+        ):
+
+            face = get_face(
+                image,
+                self.landmarker
+            )
+
+            if face is not None:
+
+                self.samples.append(
+                    face
+                )
+
+        # Face detection for live display
+        face = get_face(
+            image,
+            self.landmarker
+        )
+
+        if face is not None:
+
+            cv2.putText(
+                display,
+                "FACE DETECTED",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2
+            )
+
+        else:
+
+            cv2.putText(
+                display,
+                "MOVE INTO CAMERA",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
+            )
+
+        cv2.putText(
+            display,
+            f"Samples: {len(self.samples)}/{SAMPLES_NEEDED}",
+            (20, 70),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2
+        )
+
+        if len(self.samples) >= SAMPLES_NEEDED:
+
+            cv2.putText(
+                display,
+                "READY - CLICK SAVE STUDENT",
+                (20, 105),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2
+            )
+
+        else:
+
+            cv2.putText(
+                display,
+                "Slowly move: left / right / up / down",
+                (20, 105),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                2
+            )
+
+        return av.VideoFrame.from_ndarray(
+            display,
+            format="bgr24"
+        )
 
 
 # =========================================================
 # ATTENDANCE
 # =========================================================
 
-def create_attendance_file():
-
-    if not os.path.exists(
-        ATTENDANCE_FILE
-    ):
-
-        try:
-
-            with open(
-                ATTENDANCE_FILE,
-                "w",
-                newline="",
-                encoding="utf-8"
-            ) as file:
-
-                writer = csv.writer(file)
-
-                writer.writerow([
-                    "Name",
-                    "Date",
-                    "Time",
-                    "Status"
-                ])
-
-        except Exception:
-            pass
-
-
-def load_attendance():
-
-    create_attendance_file()
-
-    records = []
-
-    try:
-
-        with open(
-            ATTENDANCE_FILE,
-            "r",
-            newline="",
-            encoding="utf-8"
-        ) as file:
-
-            reader = csv.DictReader(file)
-
-            for row in reader:
-                records.append(row)
-
-    except Exception:
-        pass
-
-    return records
-
-
 def mark_attendance(name):
-
-    records = load_attendance()
 
     today = datetime.now().strftime(
         "%Y-%m-%d"
     )
 
-    for record in records:
-
-        if (
-            record.get("Name") == name
-            and record.get("Date") == today
-        ):
-
-            return False
-
-    try:
+    # Create CSV if necessary
+    if not os.path.exists(ATTENDANCE_FILE):
 
         with open(
             ATTENDANCE_FILE,
-            "a",
-            newline="",
-            encoding="utf-8"
+            "w",
+            newline=""
         ) as file:
 
             writer = csv.writer(file)
 
-            writer.writerow([
+            writer.writerow(
+                [
+                    "Name",
+                    "Date",
+                    "Time",
+                    "Status"
+                ]
+            )
+
+    # Check duplicate
+    with open(
+        ATTENDANCE_FILE,
+        "r",
+        newline=""
+    ) as file:
+
+        reader = csv.DictReader(file)
+
+        for row in reader:
+
+            if (
+                row["Name"] == name
+                and row["Date"] == today
+            ):
+
+                return False
+
+    now = datetime.now()
+
+    with open(
+        ATTENDANCE_FILE,
+        "a",
+        newline=""
+    ) as file:
+
+        writer = csv.writer(file)
+
+        writer.writerow(
+            [
                 name,
                 today,
-                datetime.now().strftime(
-                    "%H:%M:%S"
-                ),
+                now.strftime("%H:%M:%S"),
                 "Present"
-            ])
+            ]
+        )
 
-        return True
-
-    except Exception:
-        return False
+    return True
 
 
 # =========================================================
-# INITIALIZATION
+# STREAMLIT
 # =========================================================
 
-students = load_students()
-
-create_attendance_file()
-
-
-# =========================================================
-# SIDEBAR
-# =========================================================
-
-st.sidebar.title("🎓 ClassLens")
-
-st.sidebar.write(
-    "AI-Powered Face Recognition Attendance"
+st.set_page_config(
+    page_title="ClassLens",
+    page_icon="🎓",
+    layout="wide"
 )
 
-st.sidebar.divider()
+st.title("🎓 ClassLens")
 
 page = st.sidebar.radio(
     "Navigation",
     [
-        "🏠 Home",
-        "📷 Mark Attendance",
-        "👤 Enroll Student",
-        "📊 View Records"
+        "Home",
+        "Enroll Student",
+        "Mark Attendance",
+        "View Records"
     ]
 )
 
@@ -496,380 +370,324 @@ page = st.sidebar.radio(
 # HOME
 # =========================================================
 
-if page == "🏠 Home":
+if page == "Home":
 
-    st.title("🎓 ClassLens")
+    students = load_students()
 
-    st.subheader(
-        "AI-Powered Face Recognition Attendance System"
-    )
-
-    st.write(
-        "Automatically recognize students "
-        "and record classroom attendance."
-    )
-
-    st.divider()
-
-    records = load_attendance()
-
-    today = datetime.now().strftime(
-        "%Y-%m-%d"
-    )
-
-    today_count = sum(
-        1
-        for record in records
-        if record.get("Date") == today
+    st.header(
+        "AI Face Recognition Attendance"
     )
 
     col1, col2, col3 = st.columns(3)
 
-    with col1:
-
-        st.metric(
-            "👥 Students",
-            len(students)
-        )
-
-    with col2:
-
-        st.metric(
-            "📅 Present Today",
-            today_count
-        )
-
-    with col3:
-
-        if CASCADE_OK and DEEPFACE_OK:
-
-            st.metric(
-                "🟢 System",
-                "Ready"
-            )
-
-        elif CASCADE_OK:
-
-            st.metric(
-                "🟡 System",
-                "DeepFace Setup"
-            )
-
-        else:
-
-            st.metric(
-                "🔴 System",
-                "Detector Error"
-            )
-
-    st.divider()
-
-    st.info(
-        "Use the sidebar to enroll students, "
-        "mark attendance, or view records."
+    col1.metric(
+        "Students",
+        len(students)
     )
 
-    if not CASCADE_OK:
+    col2.metric(
+        "Recognition",
+        "FaceNet"
+    )
 
-        st.error(
-            "OpenCV face detector is unavailable."
-        )
+    col3.metric(
+        "Face Detection",
+        "MediaPipe"
+    )
 
-    if not DEEPFACE_OK:
-
-        st.warning(
-            "DeepFace is not currently available. "
-            "Dashboard functions can still be viewed."
-        )
+    st.write(
+        "Live facial recognition with FaceNet "
+        "embeddings and automated attendance."
+    )
 
 
 # =========================================================
 # ENROLL STUDENT
 # =========================================================
 
-elif page == "👤 Enroll Student":
+elif page == "Enroll Student":
 
-    st.title("👤 Enroll Student")
-
-    if not CASCADE_OK:
-
-        st.error(
-            "❌ Face detector is unavailable."
-        )
-
-        st.stop()
-
-    if not DEEPFACE_OK:
-
-        st.error(
-            "❌ DeepFace is unavailable."
-        )
-
-        st.stop()
+    st.header("👤 Enroll Student")
 
     name = st.text_input(
         "Student Name"
-    )
+    ).strip()
 
-    photo = st.camera_input(
-        "Capture Student Face"
-    )
+    if not name:
 
-    if photo is not None:
-
-        data = photo.getvalue()
-
-        array = np.frombuffer(
-            data,
-            dtype=np.uint8
+        st.info(
+            "Enter the student's name."
         )
 
-        frame = cv2.imdecode(
-            array,
-            cv2.IMREAD_COLOR
+    else:
+
+        st.info(
+            "Start the webcam. Keep your face visible "
+            "and slowly move left, right, up and down."
         )
 
-        if frame is None:
+        ctx = webrtc_streamer(
+            key="classlens-enrollment",
+            video_processor_factory=EnrollmentProcessor,
+            media_stream_constraints={
+                "video": {
+                    "width": 640,
+                    "height": 480,
+                    "frameRate": 20
+                },
+                "audio": False
+            },
+            async_processing=True
+        )
 
-            st.error(
-                "Could not read camera image."
+        if ctx.video_processor:
+
+            count = len(
+                ctx.video_processor.samples
             )
 
-        else:
-
-            st.image(
-                frame,
-                channels="BGR",
-                caption="Captured Image"
+            st.write(
+                f"Captured: {count}/{SAMPLES_NEEDED}"
             )
 
-            face = detect_face(frame)
-
-            if face is None:
-
-                st.error(
-                    "❌ Face not detected."
-                )
-
-            else:
+            if count >= SAMPLES_NEEDED:
 
                 st.success(
-                    "✅ Face detected!"
-                )
-
-                st.image(
-                    face,
-                    channels="BGR",
-                    caption="Detected Face"
+                    "Enough face samples captured."
                 )
 
                 if st.button(
-                    "💾 Enroll Student",
+                    "Save Student",
                     type="primary"
                 ):
 
-                    if not name.strip():
+                    samples = list(
+                        ctx.video_processor.samples
+                    )
 
-                        st.warning(
-                            "Enter the student's name."
+                    embeddings = []
+
+                    progress = st.progress(0)
+
+                    student_folder = os.path.join(
+                        DATASET_DIR,
+                        name
+                    )
+
+                    os.makedirs(
+                        student_folder,
+                        exist_ok=True
+                    )
+
+                    for i, face in enumerate(samples):
+
+                        # Save face sample
+                        cv2.imwrite(
+                            os.path.join(
+                                student_folder,
+                                f"{i + 1}.jpg"
+                            ),
+                            face
+                        )
+
+                        # Generate FaceNet embedding
+                        embedding = create_embedding(
+                            face
+                        )
+
+                        if embedding is not None:
+
+                            embeddings.append(
+                                embedding
+                            )
+
+                        progress.progress(
+                            (i + 1) / len(samples)
+                        )
+
+                    if len(embeddings) >= 5:
+
+                        students = load_students()
+
+                        students[name] = embeddings
+
+                        save_students(
+                            students
+                        )
+
+                        st.success(
+                            f"{name} enrolled successfully "
+                            f"with {len(embeddings)} embeddings."
                         )
 
                     else:
 
-                        with st.spinner(
-                            "Creating face embedding..."
-                        ):
-
-                            embedding = create_embedding(
-                                face
-                            )
-
-                        if embedding is None:
-
-                            st.error(
-                                "Could not create face embedding."
-                            )
-
-                        else:
-
-                            clean_name = name.strip()
-
-                            if clean_name not in students:
-
-                                students[
-                                    clean_name
-                                ] = []
-
-                            students[
-                                clean_name
-                            ].append(
-                                embedding.tolist()
-                            )
-
-                            if save_students(students):
-
-                                st.success(
-                                    f"✅ {clean_name} "
-                                    "enrolled successfully!"
-                                )
-
-                            else:
-
-                                st.error(
-                                    "Could not save student."
-                                )
+                        st.error(
+                            "Face embeddings could not be "
+                            "generated reliably. Please enroll again."
+                        )
 
 
 # =========================================================
 # MARK ATTENDANCE
 # =========================================================
 
-elif page == "📷 Mark Attendance":
+elif page == "Mark Attendance":
 
-    st.title("📷 Mark Attendance")
+    st.header("📸 Mark Attendance")
 
-    if not CASCADE_OK:
+    students = load_students()
 
-        st.error(
-            "❌ Face detector is unavailable."
-        )
-
-        st.stop()
-
-    if not DEEPFACE_OK:
-
-        st.error(
-            "❌ DeepFace is unavailable."
-        )
-
-        st.stop()
-
-    if len(students) == 0:
+    if not students:
 
         st.warning(
-            "No students are enrolled."
+            "No students enrolled."
         )
 
-    photo = st.camera_input(
-        "Capture Face"
-    )
+    else:
 
-    if photo is not None:
-
-        data = photo.getvalue()
-
-        array = np.frombuffer(
-            data,
-            dtype=np.uint8
+        picture = st.camera_input(
+            "Look directly at the camera"
         )
 
-        frame = cv2.imdecode(
-            array,
-            cv2.IMREAD_COLOR
-        )
+        if picture:
 
-        if frame is None:
-
-            st.error(
-                "Could not read camera image."
+            data = np.frombuffer(
+                picture.getvalue(),
+                dtype=np.uint8
             )
 
-        else:
-
-            st.image(
-                frame,
-                channels="BGR",
-                caption="Captured Image"
+            image = cv2.imdecode(
+                data,
+                cv2.IMREAD_COLOR
             )
 
-            face = detect_face(frame)
+            landmarker = make_landmarker()
+
+            face = get_face(
+                image,
+                landmarker
+            )
+
+            landmarker.close()
 
             if face is None:
 
                 st.error(
-                    "❌ Face not detected."
+                    "No clear face detected."
                 )
 
             else:
 
-                st.success(
-                    "✅ Face detected!"
-                )
-
-                st.image(
-                    face,
-                    channels="BGR",
-                    caption="Detected Face"
-                )
-
-                if st.button(
-                    "🔍 Recognize Face",
-                    type="primary"
+                with st.spinner(
+                    "Recognizing..."
                 ):
 
-                    with st.spinner(
-                        "Recognizing..."
-                    ):
+                    embedding = create_embedding(
+                        face
+                    )
 
-                        name, distance = recognize_face(
-                            frame,
-                            students
-                        )
+                if embedding is None:
 
-                    if name is None:
+                    st.error(
+                        "Face embedding failed."
+                    )
 
-                        st.error(
-                            "Face recognition failed."
-                        )
+                else:
 
-                    elif name == "Unknown":
+                    best_name = "Unknown"
+                    best_distance = float("inf")
 
-                        st.error(
-                            "❌ Unknown Person"
-                        )
+                    # Compare against every student's
+                    # enrolled embeddings
+                    for student, saved_embeddings in students.items():
 
-                        if distance != float("inf"):
+                        distances = []
 
-                            st.write(
-                                f"Distance: {distance:.2f}"
+                        for saved in saved_embeddings:
+
+                            saved = np.asarray(
+                                saved,
+                                dtype=np.float32
                             )
 
-                    else:
+                            distance = np.linalg.norm(
+                                embedding - saved
+                            )
+
+                            distances.append(
+                                distance
+                            )
+
+                        distances.sort()
+
+                        # Use closest 3 samples
+                        closest = distances[:3]
+
+                        student_distance = float(
+                            np.mean(closest)
+                        )
+
+                        if student_distance < best_distance:
+
+                            best_distance = (
+                                student_distance
+                            )
+
+                            best_name = student
+
+                    if (
+                        best_name != "Unknown"
+                        and best_distance < RECOGNITION_THRESHOLD
+                    ):
 
                         st.success(
-                            f"✅ {name} recognized!"
+                            f"Recognized: {best_name}"
                         )
 
                         st.write(
-                            f"Distance: {distance:.2f}"
+                            f"Face distance: "
+                            f"{best_distance:.2f}"
                         )
 
-                        if mark_attendance(name):
+                        if mark_attendance(
+                            best_name
+                        ):
 
                             st.success(
-                                f"🟢 Attendance marked "
-                                f"for {name}."
+                                "✅ Attendance marked."
                             )
 
                         else:
 
                             st.info(
-                                f"ℹ️ {name} is already "
-                                "marked present today."
+                                "Attendance already marked "
+                                "for today."
                             )
+
+                    else:
+
+                        st.error(
+                            "❌ Unknown person"
+                        )
+
+                        st.write(
+                            f"Closest distance: "
+                            f"{best_distance:.2f}"
+                        )
 
 
 # =========================================================
 # VIEW RECORDS
 # =========================================================
 
-elif page == "📊 View Records":
+elif page == "View Records":
 
-    st.title("📊 Attendance Records")
+    st.header("📊 Attendance Records")
 
-    records = load_attendance()
-
-    if len(records) == 0:
+    if not os.path.exists(
+        ATTENDANCE_FILE
+    ):
 
         st.info(
             "No attendance records yet."
@@ -877,59 +695,26 @@ elif page == "📊 View Records":
 
     else:
 
-        for record in records:
+        with open(
+            ATTENDANCE_FILE,
+            "r",
+            newline=""
+        ) as file:
 
-            name = record.get(
-                "Name",
-                ""
+            records = list(
+                csv.DictReader(file)
             )
 
-            date = record.get(
-                "Date",
-                ""
+        if records:
+
+            st.dataframe(
+                records,
+                use_container_width=True
             )
 
-            time = record.get(
-                "Time",
-                ""
+        else:
+
+            st.info(
+                "No attendance records yet."
             )
 
-            status = record.get(
-                "Status",
-                ""
-            )
-
-            st.write(
-                f"👤 {name}   |   "
-                f"📅 {date}   |   "
-                f"⏰ {time}   |   "
-                f"🟢 {status}"
-            )
-
-        st.divider()
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.metric(
-                "Total Records",
-                len(records)
-            )
-
-        unique_students = set()
-
-        for record in records:
-
-            if record.get("Name"):
-
-                unique_students.add(
-                    record.get("Name")
-                )
-
-        with col2:
-
-            st.metric(
-                "Students Present",
-                len(unique_students)
-            )

@@ -1,133 +1,252 @@
-import cv2
-import pickle
-import numpy as np
-import pandas as pd
+import math
 import os
+import pickle
 import time
 from datetime import datetime
+
+import cv2
+import mediapipe as mp
+import numpy as np
+import pandas as pd
 from deepface import DeepFace
 
 
-# ==========================================
-# 1. LOAD SHAIK'S SAVED EMBEDDINGS
-# ==========================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-with open("shaik_embeddings.pkl", "rb") as file:
+EMBEDDINGS_FILE = "shaik_embeddings.pkl"
+ATTENDANCE_FILE = "attendance.csv"
+MODEL_FILE = "models/face_landmarker.task"
+
+RECOGNITION_INTERVAL = 10
+REQUIRED_MATCHES = 3
+RECOGNITION_THRESHOLD = 5.0
+
+EAR_THRESHOLD = 0.20
+
+
+# ============================================================
+# LOAD SAVED EMBEDDINGS
+# ============================================================
+
+with open(EMBEDDINGS_FILE, "rb") as file:
     shaik_embeddings = pickle.load(file)
 
-print("Loaded embeddings:", len(shaik_embeddings))
+shaik_embeddings = [
+    np.array(embedding, dtype=np.float32)
+    for embedding in shaik_embeddings
+]
+
+print(f"Loaded Shaik embeddings: {len(shaik_embeddings)}")
 
 
-# ==========================================
-# 2. OPEN WEBCAM
-# ==========================================
+# ============================================================
+# MEDIAPIPE FACE LANDMARKER
+# ============================================================
 
-cap = cv2.VideoCapture(0)
+BaseOptions = mp.tasks.BaseOptions
+FaceLandmarker = mp.tasks.vision.FaceLandmarker
+FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+RunningMode = mp.tasks.vision.RunningMode
 
-if not cap.isOpened():
-    print("Could not open webcam")
-    exit()
 
-
-# ==========================================
-# 3. LOAD FACE DETECTOR
-# ==========================================
-
-face_cascade = cv2.CascadeClassifier(
-    cv2.data.haarcascades +
-    "haarcascade_frontalface_default.xml"
+options = FaceLandmarkerOptions(
+    base_options=BaseOptions(
+        model_asset_path=MODEL_FILE
+    ),
+    running_mode=RunningMode.VIDEO,
+    num_faces=1,
+    min_face_detection_confidence=0.6,
+    min_face_presence_confidence=0.6,
+    min_tracking_confidence=0.6
 )
 
 
-# ==========================================
-# 4. VARIABLES
-# ==========================================
+# ============================================================
+# LANDMARK DISTANCE
+# ============================================================
 
-frame_count = 0
+def distance(p1, p2):
+    """Calculate Euclidean distance between two face landmarks."""
 
-# Most recent recognition result
-last_name = "Unknown"
-
-# Recognition threshold
-threshold = 5
-
-# Attendance message
-attendance_message = ""
-attendance_message_until = 0
+    return math.sqrt(
+        (p1.x - p2.x) ** 2 +
+        (p1.y - p2.y) ** 2
+    )
 
 
-# ==========================================
-# 5. MARK ATTENDANCE FUNCTION
-# ==========================================
+# ============================================================
+# EYE ASPECT RATIO
+# ============================================================
+
+def calculate_ear(landmarks):
+    """Calculate average Eye Aspect Ratio for both eyes."""
+
+    left_vertical = distance(
+        landmarks[159],
+        landmarks[145]
+    )
+
+    left_horizontal = distance(
+        landmarks[33],
+        landmarks[133]
+    )
+
+    right_vertical = distance(
+        landmarks[386],
+        landmarks[374]
+    )
+
+    right_horizontal = distance(
+        landmarks[362],
+        landmarks[263]
+    )
+
+    left_ear = (
+        left_vertical /
+        max(left_horizontal, 0.0001)
+    )
+
+    right_ear = (
+        right_vertical /
+        max(right_horizontal, 0.0001)
+    )
+
+    return (left_ear + right_ear) / 2
+
+
+# ============================================================
+# FACE BOX
+# ============================================================
+
+def get_face_box(landmarks, width, height):
+    """Create a bounding box around the detected face."""
+
+    xs = [point.x for point in landmarks]
+    ys = [point.y for point in landmarks]
+
+    x1 = int(min(xs) * width)
+    y1 = int(min(ys) * height)
+    x2 = int(max(xs) * width)
+    y2 = int(max(ys) * height)
+
+    face_width = x2 - x1
+    face_height = y2 - y1
+
+    if face_width < 80 or face_height < 80:
+        return None
+
+    padding_x = int(face_width * 0.15)
+    padding_y = int(face_height * 0.15)
+
+    x1 = max(0, x1 - padding_x)
+    y1 = max(0, y1 - padding_y)
+    x2 = min(width, x2 + padding_x)
+    y2 = min(height, y2 + padding_y)
+
+    return x1, y1, x2, y2
+
+
+# ============================================================
+# FACE RECOGNITION
+# ============================================================
+
+def recognize_face(frame):
+    """Recognize a face using DeepFace FaceNet embeddings."""
+
+    try:
+        result = DeepFace.represent(
+            img_path=frame,
+            model_name="Facenet",
+            detector_backend="opencv",
+            enforce_detection=True
+        )
+
+        if not result:
+            return "Unknown", None
+
+        current_embedding = np.array(
+            result[0]["embedding"],
+            dtype=np.float32
+        )
+
+        distances = []
+
+        for saved_embedding in shaik_embeddings:
+            distance_value = np.linalg.norm(
+                current_embedding - saved_embedding
+            )
+
+            distances.append(distance_value)
+
+        distances.sort()
+
+        # Use the three closest saved embeddings.
+        top_matches = distances[:3]
+
+        average_distance = float(
+            np.mean(top_matches)
+        )
+
+        if average_distance < RECOGNITION_THRESHOLD:
+            return "Shaik", average_distance
+
+        return "Unknown", average_distance
+
+    except Exception:
+        return "Unknown", None
+
+
+# ============================================================
+# ATTENDANCE
+# ============================================================
 
 def mark_attendance(name):
+    """Mark attendance once per person per day."""
 
-    # Don't mark unknown people
-    if name == "Unknown":
+    if name != "Shaik":
         return False
 
-    # Get current date and time
-    now = datetime.now()
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_time = datetime.now().strftime("%H:%M:%S")
 
-    today = now.strftime("%Y-%m-%d")
-    current_time = now.strftime("%H:%M:%S")
-
-    # Attendance file
-    file_name = "attendance.csv"
-
-
-    # --------------------------------------
-    # If CSV doesn't exist, create it
-    # --------------------------------------
-
-    if not os.path.exists(file_name):
-
-        data = {
+    if not os.path.exists(ATTENDANCE_FILE):
+        df = pd.DataFrame({
             "Name": [name],
             "Date": [today],
             "Time": [current_time],
             "Status": ["Present"]
-        }
-
-        df = pd.DataFrame(data)
+        })
 
         df.to_csv(
-            file_name,
+            ATTENDANCE_FILE,
             index=False
         )
 
-        print("Attendance marked for", name)
-
+        print(f"Attendance marked for {name}")
         return True
 
+    try:
+        df = pd.read_csv(ATTENDANCE_FILE)
 
-    # --------------------------------------
-    # Read existing attendance
-    # --------------------------------------
-
-    df = pd.read_csv(file_name)
-
-
-    # --------------------------------------
-    # Check if already marked today
-    # --------------------------------------
+    except Exception:
+        df = pd.DataFrame(
+            columns=[
+                "Name",
+                "Date",
+                "Time",
+                "Status"
+            ]
+        )
 
     already_marked = (
-        (df["Name"] == name) &
-        (df["Date"] == today)
+        (df["Name"].astype(str) == name) &
+        (df["Date"].astype(str) == today)
     ).any()
 
-
     if already_marked:
-
-        print(name, "already marked today")
-
         return False
-
-
-    # --------------------------------------
-    # Create new attendance row
-    # --------------------------------------
 
     new_row = pd.DataFrame({
         "Name": [name],
@@ -136,253 +255,347 @@ def mark_attendance(name):
         "Status": ["Present"]
     })
 
-
-    # Add new row
     df = pd.concat(
         [df, new_row],
         ignore_index=True
     )
 
-
-    # Save CSV
     df.to_csv(
-        file_name,
+        ATTENDANCE_FILE,
         index=False
     )
 
-
-    print("Attendance marked for", name)
+    print(f"Attendance marked for {name}")
 
     return True
 
 
-# ==========================================
-# 6. MAIN WEBCAM LOOP
-# ==========================================
+# ============================================================
+# WEBCAM
+# ============================================================
 
-while True:
+cap = cv2.VideoCapture(0)
 
-    # Get webcam frame
-    ret, frame = cap.read()
-
-    if not ret:
-        print("Could not read frame")
-        break
+if not cap.isOpened():
+    print("ERROR: Cannot open webcam.")
+    raise SystemExit
 
 
-    # Increase frame counter
-    frame_count += 1
+cap.set(
+    cv2.CAP_PROP_FRAME_WIDTH,
+    640
+)
+
+cap.set(
+    cv2.CAP_PROP_FRAME_HEIGHT,
+    480
+)
 
 
-    # ======================================
-    # 7. FACE DETECTION
-    #    EVERY FRAME
-    # ======================================
+# ============================================================
+# RUNTIME VARIABLES
+# ============================================================
 
-    gray = cv2.cvtColor(
-        frame,
-        cv2.COLOR_BGR2GRAY
-    )
+frame_count = 0
+timestamp_ms = 0
 
+recognition_count = 0
 
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5
-    )
+last_name = "Unknown"
+last_distance = None
 
+eyes_closed = False
+liveness_verified = False
 
-    # ======================================
-    # 8. PROCESS EACH FACE
-    # ======================================
-
-    for x, y, w, h in faces:
+message = ""
+message_until = 0
 
 
-        # ----------------------------------
-        # Draw face rectangle
-        # ----------------------------------
+# ============================================================
+# START MEDIAPIPE
+# ============================================================
 
-        cv2.rectangle(
+with FaceLandmarker.create_from_options(options) as landmarker:
+
+    while True:
+
+        # ----------------------------------------------------
+        # READ FRAME
+        # ----------------------------------------------------
+
+        ret, frame = cap.read()
+
+        if not ret:
+            print("ERROR: Cannot read webcam frame.")
+            break
+
+        frame_count += 1
+
+        # Mirror camera
+        frame = cv2.flip(frame, 1)
+
+        height, width = frame.shape[:2]
+
+        # ----------------------------------------------------
+        # CONVERT TO RGB
+        # ----------------------------------------------------
+
+        rgb = cv2.cvtColor(
             frame,
-            (x, y),
-            (x + w, y + h),
-            (0, 255, 0),
-            2
+            cv2.COLOR_BGR2RGB
         )
 
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=rgb
+        )
 
-        # ==================================
-        # 9. RECOGNITION
-        #    EVERY 3RD FRAME
-        # ==================================
+        # ----------------------------------------------------
+        # DETECT FACE
+        # ----------------------------------------------------
 
-        if frame_count % 3 == 0:
+        result = landmarker.detect_for_video(
+            mp_image,
+            timestamp_ms
+        )
 
+        timestamp_ms += 33
 
-            # Crop face
-            face = frame[
-                y:y + h,
-                x:x + w
-            ]
+        # ----------------------------------------------------
+        # NO FACE
+        # ----------------------------------------------------
 
+        if not result.face_landmarks:
 
-            try:
+            last_name = "No Face"
+            recognition_count = 0
+            liveness_verified = False
+            eyes_closed = False
+            last_distance = None
 
-                # Generate FaceNet embedding
-                result = DeepFace.represent(
-                    img_path=face,
-                    model_name="Facenet",
-                    detector_backend="opencv",
-                    enforce_detection=False
+            cv2.putText(
+                frame,
+                "No Face Detected",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
+                2
+            )
+
+        # ----------------------------------------------------
+        # FACE FOUND
+        # ----------------------------------------------------
+
+        else:
+
+            landmarks = result.face_landmarks[0]
+
+            face_box = get_face_box(
+                landmarks,
+                width,
+                height
+            )
+
+            if face_box is not None:
+
+                x1, y1, x2, y2 = face_box
+
+                # ------------------------------------------------
+                # FACE BOX
+                # ------------------------------------------------
+
+                cv2.rectangle(
+                    frame,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
                 )
 
+                # ------------------------------------------------
+                # BLINK DETECTION
+                # ------------------------------------------------
 
-                current_embedding = np.array(
-                    result[0]["embedding"]
-                )
+                ear = calculate_ear(landmarks)
 
+                if ear < EAR_THRESHOLD:
 
-                # ----------------------------------
-                # Compare with saved embeddings
-                # ----------------------------------
+                    eyes_closed = True
 
-                distances = []
+                elif eyes_closed:
 
+                    eyes_closed = False
+                    liveness_verified = True
 
-                for saved_embedding in shaik_embeddings:
-
-                    saved_embedding = np.array(
-                        saved_embedding
+                    print(
+                        "Blink detected - liveness verified"
                     )
 
+                # ------------------------------------------------
+                # FACE RECOGNITION
+                # ------------------------------------------------
 
-                    distance = np.linalg.norm(
-                        current_embedding -
-                        saved_embedding
+                if (
+                    liveness_verified
+                    and
+                    frame_count % RECOGNITION_INTERVAL == 0
+                ):
+
+                    name, distance_value = recognize_face(
+                        frame
                     )
 
+                    last_distance = distance_value
 
-                    distances.append(distance)
+                    if name == "Shaik":
 
+                        recognition_count += 1
 
-                # Find closest embedding
-                min_distance = min(distances)
+                        if distance_value is not None:
+                            print(
+                                "Shaik match:",
+                                round(distance_value, 2),
+                                "| Count:",
+                                recognition_count
+                            )
 
+                        if (
+                            recognition_count
+                            >= REQUIRED_MATCHES
+                        ):
+                            last_name = "Shaik"
 
-                # ==================================
-                # 10. RECOGNITION DECISION
-                # ==================================
+                    else:
 
-                if min_distance < threshold:
+                        recognition_count = 0
+                        last_name = "Unknown"
 
-                    last_name = "Shaik"
+                        if distance_value is not None:
+                            print(
+                                "Unknown:",
+                                round(distance_value, 2)
+                            )
 
+                # ------------------------------------------------
+                # ATTENDANCE
+                # ------------------------------------------------
 
-                    # ----------------------------------
-                    # Mark attendance
-                    # ----------------------------------
+                if (
+                    last_name == "Shaik"
+                    and
+                    liveness_verified
+                    and
+                    recognition_count >= REQUIRED_MATCHES
+                ):
 
-                    marked = mark_attendance(
-                        last_name
-                    )
-
-
-                    # ----------------------------------
-                    # Show message if newly marked
-                    # ----------------------------------
+                    marked = mark_attendance("Shaik")
 
                     if marked:
 
-                        attendance_message = (
-                            "Attendance Marked"
+                        message = "Attendance Marked"
+
+                        message_until = (
+                            time.time() + 3
                         )
 
-                        attendance_message_until = (
-                            time.time() + 2
+                        print(
+                            "SUCCESS: Attendance marked"
                         )
 
+                        # Require another blink before
+                        # another recognition cycle.
+                        liveness_verified = False
+                        recognition_count = 0
+
+                # ------------------------------------------------
+                # LIVENESS STATUS
+                # ------------------------------------------------
+
+                if liveness_verified:
+
+                    status = "Liveness: VERIFIED"
 
                 else:
 
-                    last_name = "Unknown"
+                    status = "Blink to Verify"
 
-
-                # Print distance
-                print(
-                    "Frame:",
-                    frame_count,
-                    "| Distance:",
-                    round(min_distance, 2),
-                    "| Result:",
-                    last_name
+                cv2.putText(
+                    frame,
+                    status,
+                    (20, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 255, 0),
+                    2
                 )
 
+                # ------------------------------------------------
+                # NAME
+                # ------------------------------------------------
 
-            except Exception as e:
-
-                print(
-                    "Recognition error:",
-                    e
+                cv2.putText(
+                    frame,
+                    last_name,
+                    (
+                        x1,
+                        max(y1 - 10, 25)
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 0),
+                    2
                 )
 
-                last_name = "Unknown"
+                # ------------------------------------------------
+                # DISTANCE
+                # ------------------------------------------------
 
+                if last_distance is not None:
 
-        # ==================================
-        # 11. DISPLAY NAME
-        # ==================================
+                    cv2.putText(
+                        frame,
+                        f"Distance: {last_distance:.2f}",
+                        (20, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 255),
+                        2
+                    )
 
-        cv2.putText(
-            frame,
-            last_name,
-            (x, y - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2
+        # ----------------------------------------------------
+        # ATTENDANCE MESSAGE
+        # ----------------------------------------------------
+
+        if time.time() < message_until:
+
+            cv2.putText(
+                frame,
+                message,
+                (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2
+            )
+
+        # ----------------------------------------------------
+        # DISPLAY
+        # ----------------------------------------------------
+
+        cv2.imshow(
+            "ClassLens - AI Attendance",
+            frame
         )
 
-
-    # ======================================
-    # 12. ATTENDANCE MESSAGE
-    # ======================================
-
-    if time.time() < attendance_message_until:
-
-        cv2.putText(
-            frame,
-            attendance_message,
-            (30, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            2
-        )
+        # Press Q to quit
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
 
 
-    # ======================================
-    # 13. DISPLAY WEBCAM
-    # ======================================
-
-    cv2.imshow(
-        "ClassLens - Attendance",
-        frame
-    )
-
-
-    # ======================================
-    # 14. PRESS Q TO EXIT
-    # ======================================
-
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
-
-
-# ==========================================
-# 15. CLEAN UP
-# ==========================================
+# ============================================================
+# CLEANUP
+# ============================================================
 
 cap.release()
-
 cv2.destroyAllWindows()
