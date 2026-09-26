@@ -201,16 +201,47 @@ Attendance writes are gated behind a same-day lookup, so a student walking past 
 
 ## Roadmap
 
-- [ ] Database-backed student management (replace CSV with a proper DB)
-- [ ] Automatic recognition-threshold calibration
-- [ ] Stronger, production-grade liveness / anti-spoofing detection
-- [ ] Attendance analytics and reporting dashboard
-- [ ] Authentication and role-based access control
-- [ ] Cloud deployment (Docker + managed hosting)
-- [ ] Batch / multi-student enrollment workflow
+This section tracks known limitations of the current implementation and the planned direction for closing them — from data storage to security to deployment.
+
+### Data & Storage
+- [ ] Replace CSV storage with a proper database (PostgreSQL / SQLite) for concurrent access and query support
+- [ ] Structured student profile management (edit, deactivate, re-enroll)
+- [ ] Persistent embedding store (e.g. FAISS / vector DB) instead of in-memory comparison, for faster lookup at scale
+
+### Recognition Accuracy & Performance
+- [ ] Automatic recognition-threshold calibration per lighting condition / camera
+- [ ] Benchmark alternative embedding models (ArcFace, InsightFace) against FaceNet
+- [ ] GPU-accelerated inference for higher frame throughput
+- [ ] Handle group/multi-face frames (classroom-wide recognition instead of one-at-a-time)
+
+### Security & Anti-Spoofing
+- [ ] Stronger, production-grade liveness detection (3D depth cues, texture analysis, active challenge-response)
+- [ ] Encrypt stored embeddings and attendance records at rest
+- [ ] Authentication and role-based access control (admin vs. instructor vs. viewer)
+- [ ] Audit logging for enrollment and attendance edits
+
+### Features & UX
+- [ ] Attendance analytics dashboard (trends, absentee alerts, exportable reports)
+- [ ] Batch / bulk multi-student enrollment workflow
+- [ ] Email/SMS notifications for attendance summaries
+- [ ] Mobile-friendly capture flow
+
+### Engineering & Deployment
+- [ ] Unit and integration test coverage for detection, embedding, and matching modules
+- [ ] CI/CD pipeline (GitHub Actions) for automated testing and linting
+- [ ] Containerization with Docker for reproducible environments
+- [ ] Cloud deployment (AWS/GCP/Azure) with managed model hosting
+- [ ] API layer (FastAPI) to decouple the recognition engine from the Streamlit UI
 
 ---
 
+## Resume Highlight
+
+> **ClassLens — AI Face Recognition Attendance System**
+> `Python · OpenCV · MediaPipe · DeepFace · FaceNet · Streamlit`
+> Built a real-time attendance system using MediaPipe face detection and FaceNet facial embeddings, implementing multi-angle enrollment, distance-based face recognition, unknown-person detection, liveness verification, and duplicate-safe attendance tracking.
+
+---
 
 ## License
 
